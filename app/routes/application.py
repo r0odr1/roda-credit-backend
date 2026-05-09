@@ -1,11 +1,11 @@
-"""Endpoints de registro de solicitudes de crédito."""
+"""Endpoints de registro y consulta de solicitudes de crédito."""
 from flask import Blueprint, request, jsonify, current_app
 from pydantic import ValidationError
 
 from app.extensions import db
 from app.models import CreditApplication, VehicleType
 from app.schemas import ApplicationRequest
-from app.services.credit_service import calculate_credit
+from app.services.credit_service import calculate_credit, build_amortization_schedule
 
 applications_bp = Blueprint("applications", __name__, url_prefix="/api")
 
@@ -68,3 +68,34 @@ def list_applications():
         .all()
     )
     return jsonify([a.to_dict() for a in applications]), 200
+
+
+@applications_bp.get("/applications/<int:application_id>")
+def get_application(application_id: int):
+    """
+    GET /api/applications/<id>
+    Devuelve la solicitud individual junto con su plan de amortización
+    reconstruido a partir de los datos persistidos.
+    """
+    application = db.session.get(CreditApplication, application_id)
+    if application is None:
+        return jsonify({
+            "error": "not_found",
+            "message": f"No se encontró la solicitud #{application_id}",
+        }), 404
+
+    # Reconstruimos la tasa mensual y el plan de pagos a partir de los datos persistidos
+    annual_rate = float(application.annual_interest_rate)
+    monthly_rate = (1 + annual_rate) ** (1 / 12) - 1
+
+    schedule = build_amortization_schedule(
+        financed_amount=float(application.financed_amount),
+        monthly_payment=float(application.monthly_payment),
+        monthly_rate=monthly_rate,
+        term_months=application.term_months,
+    )
+
+    return jsonify({
+        "application": application.to_dict(),
+        "schedule": schedule,
+    }), 200
